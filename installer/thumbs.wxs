@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The MSI that installs and registers pdfcraft_explorer_thumbs.dll (WiX v5, the version PdfCraft's own
+  installer is built with). Built by package.ps1:
+
+    wix build thumbs.wxs -arch x64 -d Version=0.1.0 -d Dll=...\pdfcraft_explorer_thumbs.dll -o out.msi
+
+  A product of its own, separate from PdfCraft's: its own upgrade code, its own folder under
+  Program Files and its own COM class. Installing, updating or removing PdfCraft never removes
+  it, and a new build replaces the installed one.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!-- The handler's COM class; must equal CLSID_THUMBNAILS in ../src/windows.rs. -->
+  <?define Clsid = "{5FA886BA-5F03-435C-AAE3-6B5FF47E02EA}" ?>
+  <!-- Windows' name for "the thumbnail handler of this file type" (IThumbnailProvider). -->
+  <?define ThumbnailHandler = "{e357fccd-a995-4576-b01f-234630154e96}" ?>
+  <?define Name = "PdfCraft Explorer Thumbnails (local build)" ?>
+
+  <!-- Per machine: Explorer's thumbnail host only finds classes registered for all users. -->
+  <Package Name="$(var.Name)" Manufacturer="Local build" Version="$(var.Version)" UpgradeCode="0AFC49B6-8562-4DA1-8CA0-36B40AB77BC1" Scope="perMachine" Compressed="yes" Language="1033">
+    <SummaryInformation Description="First-page thumbnails of PDF files in File Explorer. Built locally from PdfCraft's renderer." />
+    <!-- A rebuild at the same version replaces the installed build too. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer build of PdfCraft Explorer Thumbnails is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPCOMMENTS" Value="First-page thumbnails of PDF files in File Explorer." />
+
+    <!-- Its own folder, not PdfCraft's: nothing PdfCraft's installer does can remove the DLL. -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLDIR" Name="PdfCraft Explorer Thumbnails">
+        <Component Id="Thumbnails" Guid="3DC613B1-1116-4573-BCF3-32B8C5907556" Bitness="always64">
+          <File Id="ThumbnailsDll" Source="$(var.Dll)" KeyPath="yes" />
+
+          <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\$(var.Clsid)" Value="$(var.Name)" Type="string" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\$(var.Clsid)\InprocServer32" Value="[#ThumbnailsDll]" Type="string" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\$(var.Clsid)\InprocServer32" Name="ThreadingModel" Value="Apartment" Type="string" />
+          <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved" Name="$(var.Clsid)" Value="$(var.Name)" Type="string" />
+
+          <!-- The handler is registered for the file type three times, because Explorer looks at the
+               current default app's file type first, then at .pdf, then at the system-wide .pdf
+               entry. PdfCraft.Document applies while PdfCraft is the default PDF app. The other two
+               apply with any default app that has no thumbnail handler of its own, and belong to no
+               installer, so no PdfCraft update rewrites them. -->
+          <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraft.Document\ShellEx\$(var.ThumbnailHandler)" Value="$(var.Clsid)" Type="string" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\.pdf\ShellEx\$(var.ThumbnailHandler)" Value="$(var.Clsid)" Type="string" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\ShellEx\$(var.ThumbnailHandler)" Value="$(var.Clsid)" Type="string" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Thumbnails" Title="PDF thumbnails">
+      <ComponentRef Id="Thumbnails" />
+    </Feature>
+  </Package>
+</Wix>

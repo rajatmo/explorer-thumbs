@@ -1,34 +1,105 @@
-# Builds the MSI on a Windows runner. Pushing a version tag (v0.1.0) also publishes it as a
-# GitHub release. Run by hand (Actions ▸ Release ▸ Run workflow) it only builds, and the MSI is
-# kept as a workflow artifact: a way to try a newer PdfCraft before releasing against it.
+# Builds the MSI on a Windows runner and publishes GitHub releases. Three ways in:
 #
-# The PdfCraft commit to build against is the one in pdfcraft.rev.
+# - Every day: if PdfCraft has published a version newer than the one pdfcraft.rev points at, build
+#   against that version and release it as v<add-on version>-pdfcraft-<PdfCraft version>. The
+#   new PdfCraft commit is committed to pdfcraft.rev. Nothing is released if the tests fail.
+# - A pushed tag v<add-on version> (v0.2.0): release the add-on itself, against pdfcraft.rev.
+# - By hand (Actions ▸ Release ▸ Run workflow): build only, the MSI kept as a workflow artifact,
+#   optionally against another PdfCraft commit; or run the daily check now.
 name: Release
 
 on:
+  schedule:
+    - cron: "17 5 * * *"
   push:
-    tags: ["v*"]
+    # Add-on releases only: the tags the daily check creates have a -pdfcraft-<version> suffix.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   workflow_dispatch:
     inputs:
       pdfcraft_ref:
-        description: "PdfCraft commit, tag or branch to build against (default: the commit in pdfcraft.rev)"
+        description: "Build only, against this PdfCraft commit, tag or branch (default: the commit in pdfcraft.rev)"
         required: false
         type: string
+      check_pdfcraft:
+        description: "Run the daily check now: release if PdfCraft has a newer version"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
+  # Decides what this run does: nothing, a build, or a release, and against which PdfCraft.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      ref: ${{ steps.plan.outputs.ref }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_REF: ${{ inputs.pdfcraft_ref }}
+          CHECK_NOW: ${{ inputs.check_pdfcraft }}
+        run: |
+          set -euo pipefail
+          version_in() { sed -n 's/^version *= *"\(.*\)"/\1/p' | head -n 1; }
+          addon="$(version_in < Cargo.toml)"
+          pinned="$(tr -d '[:space:]' < pdfcraft.rev)"
+          if [ -z "$addon" ] || [ -z "$pinned" ]; then echo "::error::no version in Cargo.toml, or pdfcraft.rev is empty"; exit 1; fi
+          mode=build; ref="$pinned"; tag=""
+
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            if [ "$GITHUB_REF_NAME" != "v$addon" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match version $addon in Cargo.toml"; exit 1
+            fi
+            mode=release; tag="$GITHUB_REF_NAME"
+          elif [ "$GITHUB_EVENT_NAME" = schedule ] || [ "$CHECK_NOW" = true ]; then
+            latest_tag="$(gh api repos/storytold/pdfcraft/releases/latest --jq .tag_name)"
+            latest="${latest_tag#v}"
+            built="$(gh api "repos/storytold/pdfcraft/contents/Cargo.toml?ref=$pinned" -H 'Accept: application/vnd.github.raw' | version_in)"
+            tag="v$addon-pdfcraft-$latest"
+            newest="$(printf '%s\n%s\n' "$built" "$latest" | sort -V | tail -n 1)"
+            if [ -z "$latest" ] || [ -z "$built" ]; then
+              echo "::error::could not read PdfCraft's versions (latest '$latest', pinned '$built')"; exit 1
+            elif [ "$latest" = "$built" ] || [ "$newest" != "$latest" ]; then
+              echo "PdfCraft $latest is not newer than $built, which pdfcraft.rev points at: nothing to do."
+              mode=skip
+            elif gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+              echo "$tag is already released: nothing to do."
+              mode=skip
+            else
+              echo "PdfCraft $latest is newer than $built: releasing $tag."
+              mode=auto; ref="$latest_tag"
+            fi
+          elif [ -n "$REQUESTED_REF" ]; then
+            ref="$REQUESTED_REF"
+          fi
+
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "$mode against PdfCraft $ref" >> "$GITHUB_STEP_SUMMARY"
+
   release:
+    needs: plan
+    if: needs.plan.outputs.mode != 'skip'
     runs-on: windows-latest
     timeout-minutes: 60
     defaults:
       run:
         shell: bash
+    env:
+      MODE: ${{ needs.plan.outputs.mode }}
+      TAG: ${{ needs.plan.outputs.tag }}
     steps:
       # The same layout as on a developer's machine: the two checkouts side by side, with build\
       # and release\ beside them.
@@ -36,30 +107,11 @@ jobs:
         with:
           path: explorer-thumbs
 
-      - name: Choose the PdfCraft commit
-        id: pdfcraft
-        env:
-          REQUESTED: ${{ inputs.pdfcraft_ref }}
-        run: |
-          ref="$REQUESTED"
-          if [ -z "$ref" ]; then ref="$(tr -d '[:space:]' < explorer-thumbs/pdfcraft.rev)"; fi
-          if [ -z "$ref" ]; then echo "::error::pdfcraft.rev is empty"; exit 1; fi
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@v4
         with:
           repository: storytold/pdfcraft
-          ref: ${{ steps.pdfcraft.outputs.ref }}
+          ref: ${{ needs.plan.outputs.ref }}
           path: pdfcraft
-
-      - name: Check the tag against the crate's version
-        if: github.ref_type == 'tag'
-        run: |
-          version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' explorer-thumbs/Cargo.toml | head -n 1)"
-          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
-            exit 1
-          fi
 
       - name: Install Rust
         run: |
@@ -79,20 +131,48 @@ jobs:
           path: release/
           if-no-files-found: error
 
+      # Only after the tests passed and the MSI was built: record the PdfCraft commit this release
+      # is built against, so the repository says what its latest release contains.
+      - name: Record the new PdfCraft commit
+        if: env.MODE == 'auto'
+        working-directory: explorer-thumbs
+        env:
+          BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git -C ../pdfcraft rev-parse HEAD > pdfcraft.rev
+          if ! git diff --quiet -- pdfcraft.rev; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "pdfcraft.rev: PdfCraft ${TAG##*-pdfcraft-}" -- pdfcraft.rev
+            git push origin "HEAD:$BRANCH"
+          fi
+
       - name: Publish the release
-        if: github.ref_type == 'tag'
+        if: env.MODE == 'release' || env.MODE == 'auto'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          addon="$(sed -n 's/^version *= *"\(.*\)"/\1/p' explorer-thumbs/Cargo.toml | head -n 1)"
           against="$(sed -n 's/^version *= *"\(.*\)"/\1/p' pdfcraft/Cargo.toml | head -n 1)"
           commit="$(git -C pdfcraft rev-parse HEAD)"
           {
             echo "First-page thumbnails of PDF files in Windows File Explorer (x64)."
             echo
             echo "Renderer: PdfCraft $against, [storytold/pdfcraft@${commit:0:8}](https://github.com/storytold/pdfcraft/commit/$commit)."
+            if [ "$MODE" = auto ]; then
+              echo
+              echo "Published automatically for PdfCraft $against. The add-on itself is unchanged: version $addon."
+            fi
             echo
-            echo "The installer is not code-signed, so Windows names the publisher as unknown. It installs for all users and asks for administrator approval. It replaces an earlier version; PdfCraft itself does not need to be installed."
+            echo "The installer is not code-signed, so Windows names the publisher as unknown. It installs for all users and asks for administrator approval. It replaces an earlier build; PdfCraft itself does not need to be installed."
           } > notes.md
-          gh release create "$GITHUB_REF_NAME" release/*.msi release/*.sha256 \
-            --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --title "PdfCraft Explorer Thumbnails ${GITHUB_REF_NAME#v}" --notes-file notes.md
+          if [ "$MODE" = auto ]; then
+            # The tag is created here, on the commit that records the PdfCraft commit.
+            gh release create "$TAG" release/*.msi release/*.sha256 \
+              --repo "$GITHUB_REPOSITORY" --target "$(git -C explorer-thumbs rev-parse HEAD)" \
+              --title "PdfCraft Explorer Thumbnails $addon (PdfCraft $against)" --notes-file notes.md
+          else
+            gh release create "$TAG" release/*.msi release/*.sha256 \
+              --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "PdfCraft Explorer Thumbnails $addon" --notes-file notes.md
+          fi

@@ -67,20 +67,32 @@ The crate uses three calls of PdfCraft's renderer (`pdfcraft-render`): `PageRend
 
 ## Releasing
 
-`.github/workflows/release.yml` builds the MSI on GitHub and publishes it as a release when a
-version tag is pushed:
+`.github/workflows/release.yml` builds the MSI on GitHub and publishes releases.
 
-1. Set `version` in `Cargo.toml` (the MSI's version; a release needs a new one).
+**When PdfCraft has a new version (automatic).** Once a day the workflow compares PdfCraft's latest
+release with the PdfCraft version `pdfcraft.rev` points at. If PdfCraft's is newer, it builds
+against that release, runs the checks and tests, and publishes
+`v<add-on version>-pdfcraft-<PdfCraft version>` (for example `v0.1.0-pdfcraft-0.22.0`). It then
+commits the new PdfCraft commit to `pdfcraft.rev`, so run `git pull` here before your next change.
+
+- If the build or a test fails against the new PdfCraft, nothing is released and nothing is
+  committed. GitHub mails the failure, and the check fails again each day until the crate is fixed.
+- The MSI's own version stays the add-on's. It still replaces the installed build, and its entry
+  in Installed apps names the PdfCraft version.
+- GitHub switches scheduled workflows off after 60 days without activity in the repository, and
+  mails before it does. The workflow's own commits count as activity.
+
+**When the add-on changes (a tag).**
+
+1. Set `version` in `Cargo.toml` (the MSI's version).
 2. Commit, with `pdfcraft.rev` holding the PdfCraft commit to build against (`-Pin` writes it).
-3. Tag that commit `v<version>` and push the tag: `git tag v0.1.0`, `git push origin main v0.1.0`.
+3. Tag that commit `v<version>` and push the tag: `git tag v0.2.0`, `git push origin main v0.2.0`.
 
-The workflow checks that the tag matches `Cargo.toml`, checks out PdfCraft at `pdfcraft.rev`, runs
-`package.ps1 -Test`, and attaches the MSI and its SHA-256 to a new release whose notes name the
-PdfCraft version and commit.
+The workflow checks that the tag matches `Cargo.toml` and publishes the release.
 
-Run by hand (Actions ▸ Release ▸ Run workflow), optionally against another PdfCraft commit, tag
-or branch, it only builds and keeps the MSI as a workflow artifact: a way to try a newer PdfCraft
-without releasing.
+**By hand** (Actions ▸ Release ▸ Run workflow): it only builds, optionally against another PdfCraft
+commit, tag or branch, and keeps the MSI as a workflow artifact. Ticking "Run the daily check now"
+does what the daily run does.
 
 ## How the build works
 

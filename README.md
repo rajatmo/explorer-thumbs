@@ -10,8 +10,12 @@ checkout that sits beside it, and installed by its own MSI.
 ```
 <working folder>\
   pdfcraft\          a plain checkout of storytold/pdfcraft; nothing in it is edited
-  explorer-thumbs\   this repository
+  explorer-thumbs\   this repository: source, installer definition, release workflow
+  build\             cargo's build output (made by the build; safe to delete)
+  release\           the MSI and its SHA-256 (made by the build)
 ```
+
+Building writes nothing inside either repository.
 
 ```
 git clone https://github.com/storytold/pdfcraft.git
@@ -26,13 +30,16 @@ From this repository, on Windows x64:
 powershell -ExecutionPolicy Bypass -File installer\package.ps1
 ```
 
-It prints the MSI's path: `dist\PdfCraft-Explorer-Thumbnails-<version>-x64.msi`.
+It prints the MSI's path: `..\release\PdfCraft-Explorer-Thumbnails-<version>-x64.msi`.
 
 | Option | What it does |
 |---|---|
 | `-PdfCraft <path>` | The PdfCraft checkout to build against. Default: `..\pdfcraft`. |
 | `-Test` | Also runs the format check, clippy and the tests first, and stops if they fail. |
-| `-SkipBuild` | Packages the DLL already in `target\release`. |
+| `-BuildDir <path>` | Where cargo builds. Default: `..\build`. |
+| `-OutDir <path>` | Where the MSI goes. Default: `..\release`. |
+| `-SkipBuild` | Packages the DLL already in the build folder. |
+| `-Pin` | After a successful build, records the checkout's commit in `pdfcraft.rev` (see Releasing). |
 
 It needs Rust (MSVC toolchain) and WiX v5, the version PdfCraft's own installer is built with:
 `dotnet tool install --global wix --version 5.0.2`.
@@ -48,14 +55,32 @@ The entry's comment names the PdfCraft version and commit the renderer inside th
 
 ```
 git -C ..\pdfcraft pull
-powershell -ExecutionPolicy Bypass -File installer\package.ps1 -Test
+powershell -ExecutionPolicy Bypass -File installer\package.ps1 -Test -Pin
 ```
 
-Then run the new MSI: it replaces the installed build.
+Then run the new MSI: it replaces the installed build. `-Pin` updates `pdfcraft.rev`, so the next
+release is built against the PdfCraft you just tested.
 
 The crate uses three calls of PdfCraft's renderer (`pdfcraft-render`): `PageRenderer::new`,
 `page_count` and `render`. If a newer PdfCraft changes them, the build fails in `src\lib.rs`, and
 `-Test` says whether thumbnails still come out right. The installed DLL is unaffected either way.
+
+## Releasing
+
+`.github/workflows/release.yml` builds the MSI on GitHub and publishes it as a release when a
+version tag is pushed:
+
+1. Set `version` in `Cargo.toml` (the MSI's version; a release needs a new one).
+2. Commit, with `pdfcraft.rev` holding the PdfCraft commit to build against (`-Pin` writes it).
+3. Tag that commit `v<version>` and push the tag: `git tag v0.1.0`, `git push origin main v0.1.0`.
+
+The workflow checks that the tag matches `Cargo.toml`, checks out PdfCraft at `pdfcraft.rev`, runs
+`package.ps1 -Test`, and attaches the MSI and its SHA-256 to a new release whose notes name the
+PdfCraft version and commit.
+
+Run by hand (Actions ▸ Release ▸ Run workflow), optionally against another PdfCraft commit, tag
+or branch, it only builds and keeps the MSI as a workflow artifact: a way to try a newer PdfCraft
+without releasing.
 
 ## How the build works
 
@@ -64,7 +89,7 @@ PdfCraft's renderer, so it is compiled as a member of PdfCraft's workspace. For 
 build, `package.ps1` links this repository into the checkout as `crates\explorer-thumbs` (a
 directory junction; no administrator rights). PdfCraft's workspace takes every directory under
 `crates\` as a member. Afterwards the script removes the link and puts `Cargo.lock` back, so the
-checkout is left exactly as it was. Build output goes to `target\` here, not into the checkout.
+checkout is left exactly as it was. Build output goes to `..\build`.
 
 If a build is killed half-way, the link can be left behind. Remove it with
 `cmd /c rmdir ..\pdfcraft\crates\explorer-thumbs` (this removes the link only) and restore the

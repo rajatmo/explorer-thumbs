@@ -1,0 +1,98 @@
+# Builds the MSI on a Windows runner. Pushing a version tag (v0.1.0) also publishes it as a
+# GitHub release. Run by hand (Actions ▸ Release ▸ Run workflow) it only builds, and the MSI is
+# kept as a workflow artifact: a way to try a newer PdfCraft before releasing against it.
+#
+# The PdfCraft commit to build against is the one in pdfcraft.rev.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      pdfcraft_ref:
+        description: "PdfCraft commit, tag or branch to build against (default: the commit in pdfcraft.rev)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The same layout as on a developer's machine: the two checkouts side by side, with build\
+      # and release\ beside them.
+      - uses: actions/checkout@v4
+        with:
+          path: explorer-thumbs
+
+      - name: Choose the PdfCraft commit
+        id: pdfcraft
+        env:
+          REQUESTED: ${{ inputs.pdfcraft_ref }}
+        run: |
+          ref="$REQUESTED"
+          if [ -z "$ref" ]; then ref="$(tr -d '[:space:]' < explorer-thumbs/pdfcraft.rev)"; fi
+          if [ -z "$ref" ]; then echo "::error::pdfcraft.rev is empty"; exit 1; fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: storytold/pdfcraft
+          ref: ${{ steps.pdfcraft.outputs.ref }}
+          path: pdfcraft
+
+      - name: Check the tag against the crate's version
+        if: github.ref_type == 'tag'
+        run: |
+          version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' explorer-thumbs/Cargo.toml | head -n 1)"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
+            exit 1
+          fi
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 5.0.2
+
+      - name: Test, build and package
+        shell: pwsh
+        run: ./explorer-thumbs/installer/package.ps1 -Test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: release/
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          against="$(sed -n 's/^version *= *"\(.*\)"/\1/p' pdfcraft/Cargo.toml | head -n 1)"
+          commit="$(git -C pdfcraft rev-parse HEAD)"
+          {
+            echo "First-page thumbnails of PDF files in Windows File Explorer (x64)."
+            echo
+            echo "Renderer: PdfCraft $against, [storytold/pdfcraft@${commit:0:8}](https://github.com/storytold/pdfcraft/commit/$commit)."
+            echo
+            echo "The installer is not code-signed, so Windows names the publisher as unknown. It installs for all users and asks for administrator approval. It replaces an earlier version; PdfCraft itself does not need to be installed."
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" release/*.msi release/*.sha256 \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "PdfCraft Explorer Thumbnails ${GITHUB_REF_NAME#v}" --notes-file notes.md

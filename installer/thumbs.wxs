@@ -3,7 +3,7 @@
   The MSI that installs and registers pdfcraft_explorer_thumbs.dll (WiX v5, the version PdfCraft's own
   installer is built with). Built by package.ps1:
 
-    wix build thumbs.wxs -arch x64 -d Version=0.1.0 -d Dll=...\pdfcraft_explorer_thumbs.dll -o out.msi
+    wix build thumbs.wxs -arch x64 -d Version=0.1.0 -d Dll=...\pdfcraft_explorer_thumbs.dll -d Against=0.21.1 -o out.msi
 
   A product of its own, separate from PdfCraft's: its own upgrade code, its own folder under
   Program Files and its own COM class. Installing, updating or removing PdfCraft never removes
@@ -24,7 +24,8 @@
     <MediaTemplate EmbedCab="yes" />
 
     <Property Id="ARPNOMODIFY" Value="1" />
-    <Property Id="ARPCOMMENTS" Value="First-page thumbnails of PDF files in File Explorer." />
+    <!-- Shown in Installed apps: which PdfCraft the renderer inside the DLL comes from. -->
+    <Property Id="ARPCOMMENTS" Value="First-page thumbnails of PDF files in File Explorer. Renderer: PdfCraft $(var.Against)." />
 
     <!-- Its own folder, not PdfCraft's: nothing PdfCraft's installer does can remove the DLL. -->
     <StandardDirectory Id="ProgramFiles64Folder">

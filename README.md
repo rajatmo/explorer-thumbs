@@ -1,45 +1,74 @@
 # pdfcraft-explorer-thumbs
 
-A local add-on: Windows File Explorer shows the **first page of each PDF as its thumbnail**.
+An add-on: Windows File Explorer shows the **first page of each PDF as its thumbnail**.
 
-It is not part of PdfCraft's releases. It is a repository of its own that sits inside a PdfCraft
-checkout, at `crates/explorer-thumbs`, because it is built against PdfCraft's renderer. It is
-installed by its own MSI.
+It is not part of PdfCraft's releases. It is a repository of its own, built against a PdfCraft
+checkout that sits beside it, and installed by its own MSI.
 
-## Setting up
+## Layout
+
+```
+<working folder>\
+  pdfcraft\          a plain checkout of storytold/pdfcraft; nothing in it is edited
+  explorer-thumbs\   this repository
+```
 
 ```
 git clone https://github.com/storytold/pdfcraft.git
-git clone <this repository> pdfcraft/crates/explorer-thumbs
+git clone <this repository> explorer-thumbs
 ```
 
-PdfCraft's workspace takes every directory under `crates/` as a member, so nothing in PdfCraft is
-edited. To keep `git status` in the PdfCraft checkout quiet, add `crates/explorer-thumbs/` to its
-`.git/info/exclude`.
+## Build the installer
 
-## Build and install
-
-From the PdfCraft checkout's root, on Windows x64:
+From this repository, on Windows x64:
 
 ```
-powershell -ExecutionPolicy Bypass -File crates\explorer-thumbs\installer\package.ps1
+powershell -ExecutionPolicy Bypass -File installer\package.ps1
 ```
 
-It builds the DLL, then the MSI from `installer\thumbs.wxs`, and prints the MSI's path:
-`target\explorer-thumbs\PdfCraft-Explorer-Thumbnails-<version>-x64.msi`. It needs WiX v5, the
-version PdfCraft's own installer is built with: `dotnet tool install --global wix --version 5.0.2`.
+It prints the MSI's path: `dist\PdfCraft-Explorer-Thumbnails-<version>-x64.msi`.
+
+| Option | What it does |
+|---|---|
+| `-PdfCraft <path>` | The PdfCraft checkout to build against. Default: `..\pdfcraft`. |
+| `-Test` | Also runs the format check, clippy and the tests first, and stops if they fail. |
+| `-SkipBuild` | Packages the DLL already in `target\release`. |
+
+It needs Rust (MSVC toolchain) and WiX v5, the version PdfCraft's own installer is built with:
+`dotnet tool install --global wix --version 5.0.2`.
 
 Run the MSI and approve the administrator prompt. It has no pages to click through. Then restart
 File Explorer (or sign out and in). Thumbnails Explorer cached earlier stay until its cache is
 cleared: Disk Cleanup ▸ Thumbnails.
 
 To remove it: Settings ▸ Apps ▸ Installed apps ▸ "PdfCraft Explorer Thumbnails (local build)".
+The entry's comment names the PdfCraft version and commit the renderer inside the DLL comes from.
 
-To see a thumbnail without Explorer:
+## Moving to a newer PdfCraft
 
 ```
-cargo run --release -p pdfcraft-explorer-thumbs --example thumb -- in.pdf out.bmp 256
+git -C ..\pdfcraft pull
+powershell -ExecutionPolicy Bypass -File installer\package.ps1 -Test
 ```
+
+Then run the new MSI: it replaces the installed build.
+
+The crate uses three calls of PdfCraft's renderer (`pdfcraft-render`): `PageRenderer::new`,
+`page_count` and `render`. If a newer PdfCraft changes them, the build fails in `src\lib.rs`, and
+`-Test` says whether thumbnails still come out right. The installed DLL is unaffected either way.
+
+## How the build works
+
+The crate cannot be compiled on its own: it needs the same dependency versions and patches as
+PdfCraft's renderer, so it is compiled as a member of PdfCraft's workspace. For the length of the
+build, `package.ps1` links this repository into the checkout as `crates\explorer-thumbs` (a
+directory junction; no administrator rights). PdfCraft's workspace takes every directory under
+`crates\` as a member. Afterwards the script removes the link and puts `Cargo.lock` back, so the
+checkout is left exactly as it was. Build output goes to `target\` here, not into the checkout.
+
+If a build is killed half-way, the link can be left behind. Remove it with
+`cmd /c rmdir ..\pdfcraft\crates\explorer-thumbs` (this removes the link only) and restore the
+lock file with `git -C ..\pdfcraft checkout Cargo.lock`.
 
 ## What is installed
 
@@ -67,33 +96,15 @@ thumbnail handler of its own.
 - **If PdfCraft ships its own thumbnail handler one day**, it is a different class. Both can be
   installed; this one can then be removed.
 
-## Moving to a newer PdfCraft
-
-This repository holds only the add-on. In the PdfCraft checkout the one trace of it is this
-crate's entry in `Cargo.lock`, which cargo writes on every build and which is never committed.
-From the PdfCraft checkout's root:
-
-```
-git checkout Cargo.lock
-git pull
-cargo test -p pdfcraft-explorer-thumbs
-```
-
-Then run `package.ps1` and the MSI as above: a new build replaces the installed one.
-
-The crate uses three calls of `pdfcraft-render`: `PageRenderer::new`, `page_count` and `render`. If
-a future PdfCraft changes them, the build fails in `src/lib.rs` and the tests say whether
-thumbnails still come out right.
-
 ## Limits
 
 - No thumbnail, and the file's icon instead, for: password-protected PDFs, files over 512 MiB,
   and files the renderer cannot open.
 - The MSI and the DLL are not code-signed.
-- `cargo xtask layers` reports this crate as unknown: registering it means editing
-  `xtask/src/layers.rs`, which this add-on avoids so that the PdfCraft checkout stays unedited.
-- `src/windows.rs` uses `unsafe`: a thumbnail handler is an in-process COM server. The workspace
-  forbids `unsafe`, so this crate has its own lint table, with `unsafe` denied outside that file.
+- An editor opened on this repository alone cannot resolve the crate (see "How the build works").
+- `src\windows.rs` uses `unsafe`: a thumbnail handler is an in-process COM server. PdfCraft's
+  workspace forbids `unsafe`, so this crate has its own lint table, with `unsafe` denied outside
+  that file.
 
 ## Licence
 

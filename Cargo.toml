@@ -1,3 +1,5 @@
+# Not buildable on its own: installer\package.ps1 builds it as a member of PdfCraft's workspace,
+# which is where `workspace = true` below is resolved. See the README.
 [package]
 name = "pdfcraft-explorer-thumbs"
 description = "Local add-on: first-page thumbnails of PDF files in Windows File Explorer"

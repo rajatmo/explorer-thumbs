@@ -1,0 +1,4 @@
+# PdfCraft's formatting, copied: rustfmt looks for this file from the source files' real location,
+# which is this repository, not the PdfCraft checkout the crate is built in.
+max_width = 150
+use_small_heuristics = "Max"

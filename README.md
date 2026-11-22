@@ -19,7 +19,7 @@ Building writes nothing inside either repository.
 
 ```
 git clone https://github.com/storytold/pdfcraft.git
-git clone <this repository> explorer-thumbs
+git clone https://github.com/rajatmo/explorer-thumbs.git
 ```
 
 ## Build the installer
@@ -133,4 +133,5 @@ thumbnail handler of its own.
 
 ## Licence
 
-MIT OR Apache-2.0, as PdfCraft.
+MIT OR Apache-2.0, at your option, as PdfCraft: see `LICENSE-MIT` and `LICENSE-APACHE`. The
+installed DLL contains PdfCraft's renderer and its dependencies, under their own licences.
